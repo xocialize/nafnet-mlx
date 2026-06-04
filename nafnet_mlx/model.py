@@ -48,6 +48,27 @@ def _avgpool_global(x: mx.array) -> mx.array:
     return mx.mean(x, axis=(1, 2), keepdims=True)
 
 
+def local_avgpool(x: mx.array, kh: int, kw: int) -> mx.array:
+    """TLC local windowed average pool (NHWC), matching `local_arch.AvgPool2d`.
+
+    Fixed kernel (kh, kw) via a summed-area table; output is edge-padded back to the
+    input spatial size so SCA produces a spatially-varying attention map. Falls back to
+    global mean when the window covers the whole input (upstream's `>=` branch).
+    """
+    _, h, w, _ = x.shape
+    k1, k2 = min(h, kh), min(w, kw)
+    if k1 >= h and k2 >= w:
+        return _avgpool_global(x)
+    s = mx.cumsum(mx.cumsum(x, axis=1), axis=2)
+    s = mx.pad(s, [(0, 0), (1, 0), (1, 0), (0, 0)])              # prepend zero row/col
+    out = (s[:, k1:, k2:, :] + s[:, :-k1, :-k2, :]
+           - s[:, :-k1, k2:, :] - s[:, k1:, :-k2, :]) / (k1 * k2)
+    _h, _w = out.shape[1], out.shape[2]
+    out = mx.pad(out, [(0, 0), ((h - _h) // 2, (h - _h + 1) // 2),
+                       ((w - _w) // 2, (w - _w + 1) // 2), (0, 0)], mode="edge")
+    return out
+
+
 class NAFBlock(nn.Module):
     def __init__(self, c: int, DW_Expand: int = 2, FFN_Expand: int = 2):
         super().__init__()
@@ -71,9 +92,12 @@ class NAFBlock(nn.Module):
         self.beta = mx.zeros((1, 1, 1, c))
         self.gamma = mx.zeros((1, 1, 1, c))
 
+        self.pool_kernel = None   # (kh, kw) for TLC local pool; None -> global
+
     def _pool(self, x: mx.array) -> mx.array:
-        # overridden by the local (TLC) variant
-        return _avgpool_global(x)
+        if self.pool_kernel is None:
+            return _avgpool_global(x)
+        return local_avgpool(x, self.pool_kernel[0], self.pool_kernel[1])
 
     def __call__(self, inp: mx.array) -> mx.array:
         x = self.norm1(inp)
@@ -130,6 +154,33 @@ class NAFNet(nn.Module):
             self.decoders.append([NAFBlock(chan) for _ in range(num)])
 
         self.padder_size = 2 ** len(self.encoders)
+
+        if config.local:
+            self._setup_local(config.train_size)
+
+    def _setup_local(self, train_size: tuple) -> None:
+        """Assign each block's fixed TLC kernel from its training resolution (NAFNetLocal).
+
+        Mirrors `Local_Base.convert`: kernel is cached per block at train res, where
+        base_size = 1.5 * train spatial. kernel(res) = res * base_size // train_spatial = 1.5*res.
+        """
+        _, _, th, tw = train_size
+        bh, bw = int(th * 1.5), int(tw * 1.5)
+
+        def kern(rh, rw):
+            return (rh * bh // th, rw * bw // tw)
+
+        rh, rw = th, tw
+        for stage in self.encoders:
+            for blk in stage:
+                blk.pool_kernel = kern(rh, rw)
+            rh, rw = rh // 2, rw // 2
+        for blk in self.middle_blks:
+            blk.pool_kernel = kern(rh, rw)
+        for stage in self.decoders:
+            rh, rw = rh * 2, rw * 2
+            for blk in stage:
+                blk.pool_kernel = kern(rh, rw)
 
     @staticmethod
     def _run(blocks, x):
