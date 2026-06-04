@@ -1,0 +1,24 @@
+{
+  "img_channel": 3,
+  "width": 64,
+  "middle_blk_num": 12,
+  "enc_blk_nums": [
+    2,
+    2,
+    4,
+    8
+  ],
+  "dec_blk_nums": [
+    2,
+    2,
+    2,
+    2
+  ],
+  "local": false,
+  "train_size": [
+    1,
+    3,
+    256,
+    256
+  ]
+}
