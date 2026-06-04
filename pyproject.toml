@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nafnet-mlx"
+version = "0.1.0.dev0"
+description = "Apple MLX port of NAFNet (Simple Baselines for Image Restoration) — deblur / denoise"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "MVS Collective" }]
+dependencies = ["mlx>=0.31.0", "numpy>=1.26", "safetensors>=0.4", "huggingface_hub>=0.34", "pillow>=10"]
+
+[project.optional-dependencies]
+parity = ["torch>=2.2"]
+dev = ["nafnet-mlx[parity]", "pytest>=8", "gdown>=5"]
+
+[project.urls]
+Homepage = "https://github.com/xocialize/nafnet-mlx"
+Reference = "https://github.com/megvii-research/NAFNet"
+
+[tool.setuptools.packages.find]
+include = ["nafnet_mlx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
